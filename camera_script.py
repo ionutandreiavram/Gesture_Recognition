@@ -2,6 +2,8 @@ import cv2
 import mediapipe as mp
 import numpy as np
 from mediapipe.framework.formats import landmark_pb2
+import time
+import os
 
 # Inițializare MediaPipe
 mp_hands = mp.solutions.hands
@@ -13,6 +15,29 @@ mp_draw = mp.solutions.drawing_utils
 MIN_DETECTION_CONFIDENCE = 0.7
 MIN_TRACKING_CONFIDENCE = 0.7
 FRAME_SCALE_FACTOR = 0.8  # Factor de scalare pentru performanță (rezolutie gen)
+
+# Create output directory for saved frames
+OUTPUT_DIR = "gesture_output"
+MAX_SAVED_FRAMES = 20  # Keep only the latest 20 frames
+if not os.path.exists(OUTPUT_DIR):
+    os.makedirs(OUTPUT_DIR)
+
+def cleanup_old_frames():
+    """Remove old frames to keep only the latest MAX_SAVED_FRAMES."""
+    try:
+        # Get all jpg files in the output directory
+        files = [f for f in os.listdir(OUTPUT_DIR) if f.endswith('.jpg') and f.startswith('frame_')]
+        
+        # Sort by creation time (newest first)
+        files.sort(key=lambda x: os.path.getctime(os.path.join(OUTPUT_DIR, x)), reverse=True)
+        
+        # Remove files beyond the limit
+        if len(files) > MAX_SAVED_FRAMES:
+            for file_to_remove in files[MAX_SAVED_FRAMES:]:
+                os.remove(os.path.join(OUTPUT_DIR, file_to_remove))
+                print(f"Removed old frame: {file_to_remove}")
+    except Exception as e:
+        print(f"Error cleaning up old frames: {e}")
 
 def initialize_camera():
     """Inițializează camera web și returnează obiectul VideoCapture."""
@@ -180,7 +205,7 @@ def draw_text_with_background(frame, text, position, font_scale=1.0, font=cv2.FO
     x, y = position
     overlay = frame.copy()
     cv2.rectangle(overlay, (x, y - text_size[1] - 5), 
-                  (x + text_size[0] + 5, y + 5), bg_color, -1)
+                  (x + text_size[0] + 5, y + 5), bg_color[:3], -1)  # Remove alpha channel for cv2.rectangle
     cv2.addWeighted(overlay, 0.5, frame, 0.5, 0, frame)
     cv2.putText(frame, text, position, font, font_scale, text_color, 2)
 
@@ -239,6 +264,14 @@ def main():
                                       min_detection_confidence=0.5, refine_landmarks=True)
 
     cap = initialize_camera()
+    
+    print("Gesture recognition started!")
+    print("Press Ctrl+C to stop")
+    print(f"Frames will be saved to: {OUTPUT_DIR}/")
+    
+    frame_count = 0
+    last_save_time = time.time()
+    save_interval = 2  # Save a frame every 2 seconds
 
     try:
         while True:
@@ -261,20 +294,39 @@ def main():
                 draw_text_with_background(frame, f'Hand no {hand_id}: {numar_degete} fingers up', (10, y_base))
                 draw_text_with_background(frame, f'Gesture: {gesture}', (10, y_base + 30))
 
-            draw_text_with_background(frame, 'For exit press ESC', (10, frame.shape[0] - 20),
-                                     text_color=(0, 0, 255))
+            # Print detection results to console
+            current_time = time.time()
+            if current_time - last_save_time >= save_interval:
+                print(f"\n--- Frame {frame_count} ---")
+                print(f"Eyebrows: {face_expression_eyebrows}")
+                print(f"Mouth: {face_expression_mouth}")
+                for hand_id, numar_degete, gesture in hand_data:
+                    print(f"Hand {hand_id}: {numar_degete} fingers, Gesture: {gesture}")
+                
+                # Save frame
+                timestamp = int(time.time())
+                filename = f"{OUTPUT_DIR}/frame_{timestamp}.jpg"
+                cv2.imwrite(filename, frame)
+                print(f"Frame saved: {filename}")
+                
+                # Clean up old frames to keep only the latest 20
+                cleanup_old_frames()
+                
+                last_save_time = current_time
+            
+            frame_count += 1
+            
+            # Add a small delay to prevent excessive CPU usage
+            time.sleep(0.1)
 
-            cv2.imshow("Face and fingers gesture recognition", frame)
-
-            if cv2.waitKey(1) & 0xFF == 27:
-                break
-
+    except KeyboardInterrupt:
+        print("\nStopping gesture recognition...")
     finally:
         hands.close()
         face_detection.close()
         face_mesh.close()
         cap.release()
-        cv2.destroyAllWindows()
+        print("Camera released. Goodbye!")
 
 if __name__ == "__main__":
     main()
